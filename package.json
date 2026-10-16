@@ -1,0 +1,16 @@
+{
+  "name": "face-recognition-system",
+  "version": "1.0.0",
+  "description": "Sistem Pengenalan Wajah - Teachable Machine Style",
+  "main": "server.js",
+  "scripts": {
+    "train": "node train.js",
+    "start": "node server.js",
+    "setup": "npm install && echo Setup complete!"
+  },
+  "dependencies": {
+    "@vladmandic/face-api": "^1.7.13",
+    "@tensorflow/tfjs-node": "^4.20.0",
+    "express": "^4.18.2"
+  }
+}

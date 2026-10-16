@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Sistem Pengenalan Wajah berbasis AI - Teachable Machine Style. Upload foto dan kenali wajah secara instan.">
+  <title>FaceID Pro - Sistem Pengenalan Wajah AI</title>
+  
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  
+  <!-- Phosphor Icons -->
+  <link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.0.3/src/regular/style.css">
+  <link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.0.3/src/bold/style.css">
+  <link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.0.3/src/fill/style.css">
+  
+  <!-- Stylesheets -->
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <!-- Animated Background -->
+  <div class="bg-gradient"></div>
+  <div class="bg-grid"></div>
+  <div class="bg-orbs">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+  </div>
+
+  <!-- Loading Overlay -->
+  <div id="loadingOverlay" class="loading-overlay">
+    <div class="loading-content">
+      <div class="loading-spinner">
+        <div class="spinner-ring"></div>
+        <div class="spinner-ring"></div>
+        <div class="spinner-ring"></div>
+      </div>
+      <h2 class="loading-title">Memuat AI Model</h2>
+      <p class="loading-text" id="loadingText">Menginisialisasi Face Detection Engine...</p>
+      <div class="loading-progress">
+        <div class="loading-progress-bar" id="loadingBar"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="nav-container">
+      <a href="/" class="nav-brand">
+        <div class="nav-logo">
+          <i class="ph ph-scan-smiley"></i>
+        </div>
+        <span class="nav-title">FaceID<span class="nav-title-accent">Pro</span></span>
+      </a>
+      <div class="nav-stats" id="navStats">
+        <div class="nav-stat">
+          <i class="ph ph-users"></i>
+          <span id="statPersons">0</span> Orang
+        </div>
+        <div class="nav-stat">
+          <i class="ph ph-image"></i>
+          <span id="statImages">0</span> Foto
+        </div>
+        <div class="nav-stat status-indicator" id="statusIndicator">
+          <div class="status-dot"></div>
+          <span id="statusText">Loading...</span>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero Section -->
+  <header class="hero" id="hero">
+    <div class="hero-container">
+      <div class="hero-badge">
+        <i class="ph ph-lightning"></i>
+        Powered by Deep Learning
+      </div>
+      <h1 class="hero-title">
+        Pengenalan Wajah
+        <span class="hero-gradient-text">Berbasis AI</span>
+      </h1>
+      <p class="hero-subtitle">
+        Sistem cerdas yang dapat mengenali wajah dari dataset yang telah dilatih. 
+        Upload foto dan dapatkan hasil identifikasi secara instan dengan akurasi tinggi.
+      </p>
+      <div class="hero-features">
+        <div class="feature-chip">
+          <i class="ph ph-brain"></i>
+          ResNet-34 Model
+        </div>
+        <div class="feature-chip">
+          <i class="ph ph-target"></i>
+          99.38% LFW Accuracy
+        </div>
+        <div class="feature-chip">
+          <i class="ph ph-timer"></i>
+          Real-time Detection
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="main-content">
+    <!-- Tab Navigation -->
+    <div class="tab-nav">
+      <button class="tab-btn active" data-tab="recognize" id="tabRecognize">
+        <i class="ph ph-scan"></i>
+        Kenali Wajah
+      </button>
+      <button class="tab-btn" data-tab="webcam" id="tabWebcam">
+        <i class="ph ph-video-camera"></i>
+        Webcam Live
+      </button>
+      <button class="tab-btn" data-tab="train" id="tabTrain">
+        <i class="ph ph-brain"></i>
+        Latih Model (Training)
+      </button>
+      <button class="tab-btn" data-tab="dataset" id="tabDataset">
+        <i class="ph ph-database"></i>
+        Dataset Info
+      </button>
+    </div>
+
+    <!-- Tab: Recognize -->
+    <div class="tab-content active" id="recognizeTab">
+      <div class="recognize-layout">
+        <!-- Upload Section -->
+        <div class="upload-section">
+          <div class="card">
+            <div class="card-header">
+              <h2 class="card-title">
+                <i class="ph ph-upload-simple"></i>
+                Upload Foto
+              </h2>
+              <p class="card-desc">Drag & drop atau klik untuk memilih foto</p>
+            </div>
+            <div class="upload-area" id="uploadArea">
+              <div class="upload-icon">
+                <i class="ph ph-cloud-arrow-up"></i>
+              </div>
+              <p class="upload-text">Drop foto di sini</p>
+              <p class="upload-hint">atau klik untuk memilih file</p>
+              <p class="upload-formats">JPG, PNG, WebP • Maks 10MB</p>
+              <input type="file" id="fileInput" accept="image/*" hidden>
+            </div>
+            
+            <!-- Threshold Control -->
+            <div class="threshold-control">
+              <label class="threshold-label">
+                <span>Sensitivitas Pengenalan</span>
+                <span class="threshold-value" id="thresholdValue">0.6</span>
+              </label>
+              <input type="range" class="threshold-slider" id="thresholdSlider" 
+                     min="0.3" max="0.8" step="0.05" value="0.6">
+              <div class="threshold-hints">
+                <span>Ketat</span>
+                <span>Longgar</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Result Section -->
+        <div class="result-section">
+          <div class="card">
+            <div class="card-header">
+              <h2 class="card-title">
+                <i class="ph ph-chart-bar"></i>
+                Hasil Pengenalan
+              </h2>
+              <button class="btn-icon" id="btnClear" title="Clear results" style="display:none">
+                <i class="ph ph-x"></i>
+              </button>
+            </div>
+            
+            <!-- Canvas for face detection overlay -->
+            <div class="canvas-container" id="canvasContainer" style="display:none">
+              <canvas id="overlayCanvas"></canvas>
+              <img id="previewImage" alt="Preview">
+            </div>
+            
+            <!-- Empty state -->
+            <div class="empty-state" id="emptyState">
+              <div class="empty-icon">
+                <i class="ph ph-scan"></i>
+              </div>
+              <h3>Belum ada foto</h3>
+              <p>Upload foto untuk mulai mengenali wajah</p>
+            </div>
+            
+            <!-- Results List -->
+            <div class="results-list" id="resultsList" style="display:none"></div>
+            
+            <!-- Processing State -->
+            <div class="processing-state" id="processingState" style="display:none">
+              <div class="processing-spinner"></div>
+              <p>Menganalisis wajah...</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Webcam -->
+    <div class="tab-content" id="webcamTab">
+      <div class="card webcam-card">
+        <div class="card-header">
+          <h2 class="card-title">
+            <i class="ph ph-video-camera"></i>
+            Webcam Live Recognition
+          </h2>
+          <div class="webcam-controls">
+            <button class="btn btn-primary" id="btnStartWebcam">
+              <i class="ph ph-play"></i>
+              Mulai Webcam
+            </button>
+            <button class="btn btn-danger" id="btnStopWebcam" style="display:none">
+              <i class="ph ph-stop"></i>
+              Stop
+            </button>
+          </div>
+        </div>
+        <div class="webcam-container" id="webcamContainer">
+          <div class="webcam-placeholder" id="webcamPlaceholder">
+            <i class="ph ph-video-camera"></i>
+            <p>Klik "Mulai Webcam" untuk aktivasi</p>
+          </div>
+          <video id="webcamVideo" autoplay muted playsinline></video>
+          <canvas id="webcamCanvas"></canvas>
+        </div>
+        <div class="webcam-results" id="webcamResults"></div>
+      </div>
+    </div>
+
+    <!-- Tab: Training -->
+    <div class="tab-content" id="trainTab">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">
+              <i class="ph ph-brain"></i>
+              Training Center (Teachable Machine Style)
+            </h2>
+            <p class="card-desc">Latih model pengenalan wajah langsung dari foto di folder <code>dataset/</code></p>
+          </div>
+          <div style="display:flex; gap: 8px;">
+            <button class="btn btn-secondary" id="btnRefreshDataset" title="Scan ulang folder dataset">
+              <i class="ph ph-arrows-clockwise"></i>
+              Scan Folder
+            </button>
+            <button class="btn btn-primary" id="btnStartTraining">
+              <i class="ph ph-play"></i>
+              Mulai Latih Dataset
+            </button>
+          </div>
+        </div>
+
+        <!-- Training status bar -->
+        <div class="training-status-box" id="trainingStatusBox" style="display:none; margin-bottom: 20px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <span id="trainingCurrentPerson" style="font-weight: 600; color: var(--text-accent);">Mempersiapkan...</span>
+            <span id="trainingProgressText" style="font-family: var(--font-mono); font-weight: bold; color: var(--accent-primary);">0%</span>
+          </div>
+          <div class="loading-progress" style="height: 8px;">
+            <div class="loading-progress-bar" id="trainingProgressBar" style="width: 0%;"></div>
+          </div>
+          <div style="display: flex; gap: 15px; margin-top: 15px; align-items: center;">
+            <div id="trainingPreviewThumb" style="width: 80px; height: 80px; border-radius: 8px; background: var(--bg-tertiary); overflow: hidden; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border-primary);">
+              <i class="ph ph-image" style="font-size: 2rem; color: var(--text-muted);"></i>
+            </div>
+            <div style="flex: 1; font-size: 0.85rem; color: var(--text-secondary);" id="trainingLiveLog">
+              Menunggu proses training dimulai...
+            </div>
+          </div>
+        </div>
+
+        <!-- Discovered classes / persons -->
+        <h3 style="font-size: 1rem; margin-bottom: 12px; display:flex; align-items:center; gap:8px;">
+          <i class="ph ph-folder-user"></i>
+          Daftar Folder Teman Sekelas (Classes)
+        </h3>
+        <div class="dataset-persons" id="trainPersonsList">
+          <!-- Populated by JS -->
+        </div>
+
+        <!-- Instructions card -->
+        <div class="dataset-tips" style="margin-top: 20px;">
+          <h3><i class="ph ph-info"></i> Cara Menambahkan Foto Teman Sekelas:</h3>
+          <ol style="margin-left: 20px; line-height: 1.8; color: var(--text-secondary); font-size: 0.88rem;">
+            <li>Buka folder <code>d:\New folder\dataset\</code> di File Explorer Anda.</li>
+            <li>Buat folder baru dengan nama teman, contoh: <code>dataset\Ahmad\</code>, <code>dataset\Siti\</code>, <code>dataset\Budi\</code>.</li>
+            <li>Masukkan foto-foto teman tersebut ke dalam foldernya masing-masing (minimal 2-5 foto dengan wajah terlihat jelas).</li>
+            <li>Klik tombol <strong>"Scan Folder"</strong> lalu klik <strong>"Mulai Latih Dataset"</strong>!</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Dataset -->
+    <div class="tab-content" id="datasetTab">
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">
+            <i class="ph ph-database"></i>
+            Dataset Information
+          </h2>
+        </div>
+        <div class="dataset-stats" id="datasetStats">
+          <div class="stat-card">
+            <div class="stat-icon"><i class="ph ph-users"></i></div>
+            <div class="stat-value" id="dsPersonCount">0</div>
+            <div class="stat-label">Total Orang</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon"><i class="ph ph-image"></i></div>
+            <div class="stat-value" id="dsImageCount">0</div>
+            <div class="stat-label">Total Foto</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon"><i class="ph ph-fingerprint"></i></div>
+            <div class="stat-value" id="dsDescCount">0</div>
+            <div class="stat-label">Face Descriptors</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon"><i class="ph ph-clock"></i></div>
+            <div class="stat-value" id="dsTrainDate">-</div>
+            <div class="stat-label">Terakhir Training</div>
+          </div>
+        </div>
+        <div class="dataset-persons" id="datasetPersons">
+          <!-- Filled by JS -->
+        </div>
+        <div class="dataset-tips">
+          <h3><i class="ph ph-lightbulb"></i> Tips untuk Akurasi Tinggi (>95%)</h3>
+          <ul>
+            <li>Gunakan <strong>3-10 foto per orang</strong> dengan variasi ekspresi & sudut</li>
+            <li>Pastikan <strong>pencahayaan bagus</strong> dan wajah terlihat jelas</li>
+            <li>Gunakan foto <strong>resolusi tinggi</strong> (minimal 200x200 px)</li>
+            <li>Hindari foto dengan <strong>wajah tertutup</strong> (masker, kacamata hitam)</li>
+            <li>Sertakan foto dari <strong>berbagai sudut</strong> (depan, samping sedikit)</li>
+            <li>Gunakan <strong>background yang bervariasi</strong> untuk meningkatkan generalisasi</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- Scripts -->
+  <script src="/lib/face-api.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>
