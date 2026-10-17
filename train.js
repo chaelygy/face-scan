@@ -120,7 +120,10 @@ async function getDescriptorsForPerson(personName, personDir) {
       tf.dispose(tensor);
       
       if (detection) {
-        descriptors.push(Array.from(detection.descriptor));
+        const raw = Array.from(detection.descriptor);
+        const norm = Math.sqrt(raw.reduce((s, x) => s + x * x, 0)) || 1.0;
+        const normalized = raw.map(x => Number((x / norm).toFixed(6)));
+        descriptors.push(normalized);
         detected++;
         const confidence = (detection.detection.score * 100).toFixed(1);
         console.log(`   ✅ ${imgFile} (confidence: ${confidence}%)`);
