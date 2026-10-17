@@ -239,24 +239,44 @@
     <!-- Tab: Training -->
     <div class="tab-content" id="trainTab">
       <div class="card">
-        <div class="card-header">
+        <div class="card-header" style="flex-wrap: wrap; gap: 12px;">
           <div>
             <h2 class="card-title">
               <i class="ph ph-brain"></i>
               Training Center (Teachable Machine Style)
             </h2>
-            <p class="card-desc">Latih model pengenalan wajah langsung dari foto di folder <code>dataset/</code></p>
+            <p class="card-desc">Latih model AI pengenalan wajah langsung di browser (upload foto / webcam) atau dari folder server</p>
           </div>
-          <div style="display:flex; gap: 8px;">
-            <button class="btn btn-secondary" id="btnRefreshDataset" title="Scan ulang folder dataset">
-              <i class="ph ph-arrows-clockwise"></i>
-              Scan Folder
+          <div style="display:flex; flex-wrap: wrap; gap: 8px;">
+            <button class="btn btn-secondary" id="btnImportJson" title="Import file labeled_descriptors.json">
+              <i class="ph ph-upload-simple"></i>
+              Import JSON
             </button>
-            <button class="btn btn-primary" id="btnStartTraining">
+            <button class="btn btn-secondary" id="btnExportJson" title="Download model hasil training (labeled_descriptors.json)">
+              <i class="ph ph-download-simple"></i>
+              Download JSON
+            </button>
+            <button class="btn btn-primary" id="btnAddNewClass">
+              <i class="ph ph-user-plus"></i>
+              Tambah Orang
+            </button>
+            <button class="btn btn-success" id="btnStartTrainingStudio">
               <i class="ph ph-play"></i>
-              Mulai Latih Dataset
+              Latih Model Sekarang
             </button>
           </div>
+        </div>
+
+        <!-- Mode Switcher -->
+        <div class="training-modes-switch">
+          <button class="training-mode-btn active" id="btnModeBrowser" type="button">
+            <i class="ph ph-globe"></i>
+            Studio Web (Upload & Kamera)
+          </button>
+          <button class="training-mode-btn" id="btnModeServer" type="button">
+            <i class="ph ph-folder"></i>
+            Dataset Server (dataset/)
+          </button>
         </div>
 
         <!-- Training status bar -->
@@ -278,24 +298,44 @@
           </div>
         </div>
 
-        <!-- Discovered classes / persons -->
-        <h3 style="font-size: 1rem; margin-bottom: 12px; display:flex; align-items:center; gap:8px;">
-          <i class="ph ph-folder-user"></i>
-          Daftar Folder Teman Sekelas (Classes)
-        </h3>
-        <div class="dataset-persons" id="trainPersonsList">
-          <!-- Populated by JS -->
+        <!-- Mode 1: Browser Teachable Machine View -->
+        <div id="browserTrainingView">
+          <div class="classes-container" id="classesContainer">
+            <!-- Dynamically populated classes -->
+          </div>
+          <div class="dataset-tips" style="margin-top: 15px;">
+            <h3><i class="ph ph-lightbulb"></i> Cara Melatih Saat di-Hosting:</h3>
+            <ol style="margin-left: 20px; line-height: 1.8; color: var(--text-secondary); font-size: 0.88rem;">
+              <li>Klik tombol <strong>"Tambah Orang"</strong> untuk membuat kartu teman baru.</li>
+              <li>Klik <strong>"Upload Foto"</strong> untuk memilih foto dari galeri/laptop Anda, atau gunakan <strong>"Webcam"</strong> untuk mengambil foto langsung!</li>
+              <li>Minimal 2 - 5 foto per orang dengan wajah terlihat jelas.</li>
+              <li>Klik tombol hijau <strong>"Latih Model Sekarang"</strong>. AI akan mengekstrak 128-D face descriptors dan langsung menyimpannya.</li>
+              <li>Klik <strong>"Download JSON"</strong> kapan saja untuk menyimpan cadangan file model Anda!</li>
+            </ol>
+          </div>
         </div>
 
-        <!-- Instructions card -->
-        <div class="dataset-tips" style="margin-top: 20px;">
-          <h3><i class="ph ph-info"></i> Cara Menambahkan Foto Teman Sekelas:</h3>
-          <ol style="margin-left: 20px; line-height: 1.8; color: var(--text-secondary); font-size: 0.88rem;">
-            <li>Buka folder <code>d:\New folder\dataset\</code> di File Explorer Anda.</li>
-            <li>Buat folder baru dengan nama teman, contoh: <code>dataset\Ahmad\</code>, <code>dataset\Siti\</code>, <code>dataset\Budi\</code>.</li>
-            <li>Masukkan foto-foto teman tersebut ke dalam foldernya masing-masing (minimal 2-5 foto dengan wajah terlihat jelas).</li>
-            <li>Klik tombol <strong>"Scan Folder"</strong> lalu klik <strong>"Mulai Latih Dataset"</strong>!</li>
-          </ol>
+        <!-- Mode 2: Server Dataset View -->
+        <div id="serverTrainingView" style="display:none;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+            <h3 style="font-size: 1rem; display:flex; align-items:center; gap:8px;">
+              <i class="ph ph-folder-user"></i>
+              Daftar Folder di Server (dataset/)
+            </h3>
+            <div style="display:flex; gap:8px;">
+              <button class="btn btn-secondary" id="btnRefreshDataset" title="Scan ulang folder dataset">
+                <i class="ph ph-arrows-clockwise"></i>
+                Scan Folder
+              </button>
+              <button class="btn btn-primary" id="btnStartTraining">
+                <i class="ph ph-play"></i>
+                Latih Dataset Server
+              </button>
+            </div>
+          </div>
+          <div class="dataset-persons" id="trainPersonsList">
+            <!-- Populated by JS -->
+          </div>
         </div>
       </div>
     </div>
@@ -303,11 +343,28 @@
     <!-- Tab: Dataset -->
     <div class="tab-content" id="datasetTab">
       <div class="card">
-        <div class="card-header">
-          <h2 class="card-title">
-            <i class="ph ph-database"></i>
-            Dataset Information
-          </h2>
+        <div class="card-header" style="flex-wrap: wrap; gap: 12px;">
+          <div>
+            <h2 class="card-title">
+              <i class="ph ph-database"></i>
+              Dataset Information
+            </h2>
+            <p class="card-desc">Informasi wajah yang saat ini aktif tersimpan di memori sistem AI</p>
+          </div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="btnImportJsonDs">
+              <i class="ph ph-upload-simple"></i>
+              Import JSON
+            </button>
+            <button class="btn btn-secondary" id="btnExportJsonDs">
+              <i class="ph ph-download-simple"></i>
+              Download JSON
+            </button>
+            <button class="btn btn-secondary" id="btnReloadDataset">
+              <i class="ph ph-arrows-clockwise"></i>
+              Refresh
+            </button>
+          </div>
         </div>
         <div class="dataset-stats" id="datasetStats">
           <div class="stat-card">
@@ -348,6 +405,48 @@
       </div>
     </div>
   </main>
+
+  <!-- Modal for Webcam Snapshot Capture -->
+  <div class="tm-modal-backdrop" id="tmWebcamModal" style="display:none;">
+    <div class="tm-modal">
+      <div class="tm-modal-header">
+        <div class="tm-modal-title">
+          <i class="ph ph-camera"></i>
+          Ambil Sampel Foto: <span id="tmModalPersonName" style="color:var(--accent-primary);">Nama</span>
+        </div>
+        <button class="btn-icon" id="btnCloseTmModal" title="Tutup">
+          <i class="ph ph-x"></i>
+        </button>
+      </div>
+      <div class="tm-modal-body">
+        <div class="tm-modal-video-box">
+          <video id="tmModalVideo" autoplay muted playsinline></video>
+          <canvas id="tmModalCanvas" style="display:none;"></canvas>
+        </div>
+        <p style="font-size:0.8rem; color:var(--text-secondary); text-align:center;">
+          Arahkan wajah ke kamera. Anda bisa mengambil satu per satu atau burst 5 foto sekaligus.
+        </p>
+      </div>
+      <div class="tm-modal-footer">
+        <button class="btn btn-secondary" id="btnSnapSingle">
+          <i class="ph ph-camera"></i>
+          Ambil 1 Foto
+        </button>
+        <button class="btn btn-primary" id="btnSnapBurst">
+          <i class="ph ph-lightning"></i>
+          Burst (5 Foto)
+        </button>
+        <button class="btn btn-success" id="btnFinishModal">
+          <i class="ph ph-check"></i>
+          Selesai
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden File Inputs -->
+  <input type="file" id="importJsonInput" accept=".json,application/json" hidden>
+  <input type="file" id="classUploadInput" accept="image/*" multiple hidden>
 
   <!-- Toast Container -->
   <div class="toast-container" id="toastContainer"></div>

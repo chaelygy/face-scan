@@ -82,8 +82,13 @@ function getImageFiles(dir) {
  */
 async function loadImage(imagePath) {
   const buffer = fs.readFileSync(imagePath);
-  const tensor = tf.node.decodeImage(buffer, 3);
-  return tensor;
+  if (tf && tf.node && typeof tf.node.decodeImage === 'function') {
+    return tf.node.decodeImage(buffer, 3);
+  }
+  if (faceapi && faceapi.tf && faceapi.tf.node && typeof faceapi.tf.node.decodeImage === 'function') {
+    return faceapi.tf.node.decodeImage(buffer, 3);
+  }
+  throw new Error('TensorFlow Node backend tidak tersedia. Silakan gunakan tombol training langsung di web browser!');
 }
 
 /**

@@ -2,6 +2,7 @@
  * ============================================
  *  🧠 FaceID Pro - Client-Side Application
  *  Face Detection & Recognition Engine
+ *  Teachable Machine Studio & Live Recognition
  * ============================================
  */
 
@@ -10,10 +11,15 @@
 // ============================================
 const CONFIG = {
   modelUrl: '/models',
+  modelCdnUrl: 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/',
   descriptorsUrl: '/api/descriptors',
+  descriptorsFileUrl: '/labeled_descriptors.json',
   datasetInfoUrl: '/api/dataset-info',
+  datasetInfoFileUrl: '/dataset_info.json',
+  saveDescriptorsUrl: '/api/save-descriptors',
+  uploadImagesUrl: '/api/upload-images',
   defaultThreshold: 0.6,
-  webcamInterval: 200, // ms between webcam detections
+  webcamInterval: 200,
   detectionOptions: {
     minConfidence: 0.5
   }
@@ -26,10 +32,17 @@ let state = {
   isModelLoaded: false,
   faceMatcher: null,
   labeledDescriptors: [],
+  rawDescriptorsData: [],
   threshold: CONFIG.defaultThreshold,
   webcamStream: null,
   webcamDetectionInterval: null,
-  metadata: null
+  metadata: null,
+  
+  // Teachable Machine Studio State
+  browserClasses: [],
+  currentModalClassId: null,
+  modalWebcamStream: null,
+  activeTrainingMode: 'browser' // 'browser' or 'server'
 };
 
 // ============================================
@@ -64,23 +77,58 @@ const DOM = {
   webcamPlaceholder: $('#webcamPlaceholder'),
   webcamResults: $('#webcamResults'),
   toastContainer: $('#toastContainer'),
+  
   // Dataset tab
   dsPersonCount: $('#dsPersonCount'),
   dsImageCount: $('#dsImageCount'),
   dsDescCount: $('#dsDescCount'),
   dsTrainDate: $('#dsTrainDate'),
   datasetPersons: $('#datasetPersons'),
-  // Training tab
+  btnImportJsonDs: $('#btnImportJsonDs'),
+  btnExportJsonDs: $('#btnExportJsonDs'),
+  btnReloadDataset: $('#btnReloadDataset'),
+
+  // Training tab controls
+  btnModeBrowser: $('#btnModeBrowser'),
+  btnModeServer: $('#btnModeServer'),
+  browserTrainingView: $('#browserTrainingView'),
+  serverTrainingView: $('#serverTrainingView'),
+  classesContainer: $('#classesContainer'),
+  btnAddNewClass: $('#btnAddNewClass'),
+  btnStartTrainingStudio: $('#btnStartTrainingStudio'),
+  btnImportJson: $('#btnImportJson'),
+  btnExportJson: $('#btnExportJson'),
+  
+  // Server dataset in training tab
   btnRefreshDataset: $('#btnRefreshDataset'),
   btnStartTraining: $('#btnStartTraining'),
+  trainPersonsList: $('#trainPersonsList'),
+
+  // Live training status box
   trainingStatusBox: $('#trainingStatusBox'),
   trainingCurrentPerson: $('#trainingCurrentPerson'),
   trainingProgressText: $('#trainingProgressText'),
   trainingProgressBar: $('#trainingProgressBar'),
   trainingPreviewThumb: $('#trainingPreviewThumb'),
   trainingLiveLog: $('#trainingLiveLog'),
-  trainPersonsList: $('#trainPersonsList')
+
+  // Modal Webcam capture
+  tmWebcamModal: $('#tmWebcamModal'),
+  tmModalPersonName: $('#tmModalPersonName'),
+  tmModalVideo: $('#tmModalVideo'),
+  tmModalCanvas: $('#tmModalCanvas'),
+  btnCloseTmModal: $('#btnCloseTmModal'),
+  btnSnapSingle: $('#btnSnapSingle'),
+  btnSnapBurst: $('#btnSnapBurst'),
+  btnFinishModal: $('#btnFinishModal'),
+
+  // Hidden inputs
+  importJsonInput: $('#importJsonInput'),
+  classUploadInput: $('#classUploadInput')
 };
+
+// Reference for class currently uploading files
+let activeUploadClassId = null;
 
 // ============================================
 //  Initialization
@@ -89,6 +137,7 @@ document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
   setupEventListeners();
+  loadBrowserClasses();
   await loadAIModels();
   await loadDescriptors();
   await loadDatasetInfo();
@@ -96,163 +145,671 @@ async function init() {
 }
 
 // ============================================
-//  Model Loading
+//  Model Loading (with CDN fallback)
 // ============================================
 async function loadAIModels() {
   try {
-    updateLoading('Loading Face Detection Model...', 10);
+    updateLoading('Memuat Model AI Wajah (Local)...', 15);
     await faceapi.nets.ssdMobilenetv1.loadFromUri(CONFIG.modelUrl);
-    
-    updateLoading('Loading Face Landmark Model...', 40);
+    updateLoading('Memuat Face Landmark Model...', 45);
     await faceapi.nets.faceLandmark68Net.loadFromUri(CONFIG.modelUrl);
-    
-    updateLoading('Loading Face Recognition Model...', 70);
+    updateLoading('Memuat Face Recognition Model (ResNet-34)...', 75);
     await faceapi.nets.faceRecognitionNet.loadFromUri(CONFIG.modelUrl);
-    
-    updateLoading('AI Models loaded successfully!', 90);
+    updateLoading('AI Models siap!', 90);
     state.isModelLoaded = true;
-    
-  } catch (error) {
-    console.error('Failed to load AI models:', error);
-    updateLoading('Failed to load AI models!', 0);
-    showToast('Gagal memuat AI model. Pastikan server berjalan.', 'error');
-    updateStatus('error', 'Error');
+  } catch (localError) {
+    console.warn('Gagal memuat model dari folder local, mencoba via CDN fallback...', localError);
+    try {
+      updateLoading('Memuat AI Models dari CDN...', 30);
+      await faceapi.nets.ssdMobilenetv1.loadFromUri(CONFIG.modelCdnUrl);
+      updateLoading('Memuat Face Landmark Model (CDN)...', 60);
+      await faceapi.nets.faceLandmark68Net.loadFromUri(CONFIG.modelCdnUrl);
+      updateLoading('Memuat Face Recognition Model (CDN)...', 85);
+      await faceapi.nets.faceRecognitionNet.loadFromUri(CONFIG.modelCdnUrl);
+      updateLoading('AI Models siap via CDN!', 90);
+      state.isModelLoaded = true;
+    } catch (cdnError) {
+      console.error('Failed to load AI models from both local and CDN:', cdnError);
+      updateLoading('Gagal memuat AI model!', 0);
+      showToast('Gagal memuat AI model. Periksa koneksi internet Anda.', 'error');
+      updateStatus('error', 'Model Error');
+    }
   }
 }
 
 // ============================================
-//  Descriptors Loading
+//  Descriptors Loading (API -> File -> LocalStorage)
 // ============================================
 async function loadDescriptors() {
+  updateLoading('Memuat data training...', 95);
+  let data = null;
+
+  // 1. Try API endpoint
   try {
-    updateLoading('Loading training data...', 95);
-    
-    const response = await fetch(CONFIG.descriptorsUrl);
-    
-    if (!response.ok) {
-      if (response.status === 404) {
-        showToast('Belum ada data training. Jalankan "npm run train" terlebih dahulu.', 'warning');
-        updateStatus('error', 'No Data');
-        return;
-      }
-      throw new Error(`HTTP ${response.status}`);
+    const res = await fetch(CONFIG.descriptorsUrl);
+    if (res.ok) {
+      data = await res.json();
     }
-    
-    const data = await response.json();
+  } catch (e) {
+    console.warn('API /api/descriptors not reachable:', e);
+  }
+
+  // 2. Fallback to direct static JSON file (works on Vercel, GitHub Pages, Netlify)
+  if (!data || (!data.descriptors && !Array.isArray(data))) {
+    try {
+      const res = await fetch(CONFIG.descriptorsFileUrl);
+      if (res.ok) {
+        data = await res.json();
+        console.log('Loaded descriptors directly from /labeled_descriptors.json');
+      }
+    } catch (e) {
+      console.warn('Static file /labeled_descriptors.json not reachable:', e);
+    }
+  }
+
+  // 3. Fallback to LocalStorage (browser cache)
+  if (!data || (!data.descriptors && !Array.isArray(data))) {
+    try {
+      const cached = localStorage.getItem('faceid_descriptors');
+      if (cached) {
+        data = JSON.parse(cached);
+        console.log('Loaded descriptors from localStorage cache');
+      }
+    } catch (e) {
+      console.warn('LocalStorage descriptors error:', e);
+    }
+  }
+
+  // Process data if available
+  if (data) {
     state.metadata = data.metadata || null;
+    const descriptorsData = data.descriptors || (Array.isArray(data) ? data : []);
+    state.rawDescriptorsData = descriptorsData;
+
+    if (descriptorsData.length > 0) {
+      try {
+        state.labeledDescriptors = descriptorsData.map(item => {
+          const descriptors = item.descriptors.map(d => new Float32Array(d));
+          return new faceapi.LabeledFaceDescriptors(item.label, descriptors);
+        });
+
+        state.faceMatcher = new faceapi.FaceMatcher(
+          state.labeledDescriptors,
+          state.threshold
+        );
+
+        // Save to localStorage for instant reload
+        try {
+          localStorage.setItem('faceid_descriptors', JSON.stringify({
+            metadata: state.metadata,
+            descriptors: descriptorsData
+          }));
+        } catch (e) { /* ignore quota */ }
+
+        // Update stats
+        const totalDescs = descriptorsData.reduce((sum, item) => sum + item.descriptors.length, 0);
+        DOM.statPersons.textContent = descriptorsData.length;
+        DOM.dsPersonCount.textContent = descriptorsData.length;
+        DOM.dsDescCount.textContent = totalDescs;
+
+        if (state.metadata) {
+          DOM.statImages.textContent = state.metadata.totalImages || totalDescs;
+          DOM.dsImageCount.textContent = state.metadata.totalImages || totalDescs;
+          if (state.metadata.createdAt) {
+            const date = new Date(state.metadata.createdAt);
+            DOM.dsTrainDate.textContent = date.toLocaleDateString('id-ID', {
+              day: 'numeric', month: 'short', year: 'numeric'
+            });
+          }
+        } else {
+          DOM.statImages.textContent = totalDescs;
+          DOM.dsImageCount.textContent = totalDescs;
+        }
+
+        updateDatasetPersonsList(descriptorsData);
+        updateStatus('ready', 'Ready');
+        showToast(`Berhasil memuat ${descriptorsData.length} orang ke dalam sistem AI.`, 'success');
+        return;
+      } catch (err) {
+        console.error('Error parsing descriptors into FaceMatcher:', err);
+      }
+    }
+  }
+
+  // If no descriptors loaded
+  DOM.statPersons.textContent = '0';
+  DOM.statImages.textContent = '0';
+  DOM.dsPersonCount.textContent = '0';
+  DOM.dsDescCount.textContent = '0';
+  updateStatus('ready', '0 Data');
+  showToast('Belum ada data model. Silakan latih foto di tab "Latih Model (Training)".', 'info');
+}
+
+// ============================================
+//  Dataset Info Loading (API -> dataset_info.json)
+// ============================================
+async function loadDatasetInfo() {
+  let data = null;
+
+  try {
+    const res = await fetch(CONFIG.datasetInfoUrl);
+    if (res.ok) {
+      data = await res.json();
+    }
+  } catch (e) {
+    console.warn('API /api/dataset-info error:', e);
+  }
+
+  if (!data || !data.persons) {
+    try {
+      const res = await fetch(CONFIG.datasetInfoFileUrl);
+      if (res.ok) {
+        data = await res.json();
+      }
+    } catch (e) {
+      console.warn('Fallback /dataset_info.json error:', e);
+    }
+  }
+
+  if (data && data.persons) {
+    renderServerDatasetList(data);
+    return data;
+  }
+  return { persons: [], totalImages: 0 };
+}
+
+function renderServerDatasetList(data) {
+  if (!DOM.trainPersonsList) return;
+  DOM.trainPersonsList.innerHTML = '';
+
+  if (!data.persons || data.persons.length === 0) {
+    DOM.trainPersonsList.innerHTML = `
+      <div style="grid-column: 1/-1; padding: 25px; text-align:center; color: var(--text-muted); background: var(--bg-glass); border-radius: 12px; border: 1px dashed var(--border-primary);">
+        <i class="ph ph-folder-dashed" style="font-size: 2.2rem; margin-bottom: 8px; display: block; color: var(--accent-primary);"></i>
+        <strong style="color: var(--text-primary); display:block; margin-bottom:4px;">Folder dataset di server belum ada</strong>
+        Gunakan tab <strong>"Studio Web (Upload & Kamera)"</strong> untuk menambahkan dan melatih foto langsung dari browser!
+      </div>
+    `;
+    return;
+  }
+
+  const colors = [
+    'linear-gradient(135deg, #6366f1, #8b5cf6)',
+    'linear-gradient(135deg, #8b5cf6, #d946ef)',
+    'linear-gradient(135deg, #ec4899, #f43f5e)',
+    'linear-gradient(135deg, #f59e0b, #ef4444)',
+    'linear-gradient(135deg, #10b981, #3b82f6)'
+  ];
+
+  data.persons.forEach((p, idx) => {
+    const card = document.createElement('div');
+    card.className = 'person-card';
+    const thumbHtml = p.images && p.images.length > 0 
+      ? `<img src="${p.images[0]}" style="width:40px; height:40px; border-radius:8px; object-fit:cover;" onerror="this.onerror=null;this.src='';">`
+      : `<div class="person-avatar" style="background: ${colors[idx % colors.length]}">${p.name.substring(0,2).toUpperCase()}</div>`;
     
-    const descriptorsData = data.descriptors || data;
-    
-    if (!Array.isArray(descriptorsData) || descriptorsData.length === 0) {
-      showToast('Data training kosong. Tambahkan foto dan jalankan training.', 'warning');
-      updateStatus('error', 'Empty Data');
+    card.innerHTML = `
+      ${thumbHtml}
+      <div class="person-info">
+        <div class="person-name">${p.name}</div>
+        <div class="person-count">${p.imageCount} foto tersedia</div>
+      </div>
+    `;
+    DOM.trainPersonsList.appendChild(card);
+  });
+}
+
+// ============================================
+//  Teachable Machine Browser Studio Management
+// ============================================
+function loadBrowserClasses() {
+  try {
+    const cached = localStorage.getItem('faceid_browser_classes');
+    if (cached) {
+      state.browserClasses = JSON.parse(cached);
+    }
+  } catch (e) {
+    state.browserClasses = [];
+  }
+
+  // Default seed if empty
+  if (!state.browserClasses || state.browserClasses.length === 0) {
+    state.browserClasses = [
+      { id: 'class_' + Date.now() + '_1', name: 'Orang 1', photos: [] },
+      { id: 'class_' + Date.now() + '_2', name: 'Orang 2', photos: [] }
+    ];
+  }
+
+  renderBrowserClasses();
+}
+
+function saveBrowserClasses() {
+  try {
+    localStorage.setItem('faceid_browser_classes', JSON.stringify(state.browserClasses));
+  } catch (e) {
+    // If storage is full from images, trim or warn
+    console.warn('Could not save all images to localStorage:', e);
+  }
+}
+
+function renderBrowserClasses() {
+  if (!DOM.classesContainer) return;
+  DOM.classesContainer.innerHTML = '';
+
+  state.browserClasses.forEach((cls) => {
+    const card = document.createElement('div');
+    card.className = 'class-card';
+    card.dataset.id = cls.id;
+
+    // Build thumbnails HTML
+    let thumbsHtml = '';
+    if (cls.photos.length === 0) {
+      thumbsHtml = `
+        <div class="class-empty-thumbs">
+          <i class="ph ph-images"></i>
+          <span>Belum ada foto</span>
+        </div>
+      `;
+    } else {
+      thumbsHtml = cls.photos.map((src, photoIdx) => `
+        <div class="class-thumb-wrap">
+          <img src="${src}" alt="photo">
+          <button class="btn-delete-thumb" data-class-id="${cls.id}" data-photo-idx="${photoIdx}" title="Hapus foto">
+            <i class="ph ph-x"></i>
+          </button>
+        </div>
+      `).join('');
+    }
+
+    card.innerHTML = `
+      <div class="class-card-header">
+        <input type="text" class="class-name-input" data-class-id="${cls.id}" value="${escapeHtml(cls.name)}" placeholder="Nama Orang">
+        <span class="class-badge">${cls.photos.length} Foto</span>
+        <button class="btn-remove-class" data-class-id="${cls.id}" title="Hapus orang ini">
+          <i class="ph ph-trash"></i>
+        </button>
+      </div>
+      <div class="class-thumbs-grid">
+        ${thumbsHtml}
+      </div>
+      <div class="class-card-actions">
+        <button class="btn btn-secondary btn-upload-class" data-class-id="${cls.id}">
+          <i class="ph ph-upload-simple"></i>
+          Upload Foto
+        </button>
+        <button class="btn btn-secondary btn-webcam-class" data-class-id="${cls.id}">
+          <i class="ph ph-camera"></i>
+          Webcam
+        </button>
+      </div>
+    `;
+
+    DOM.classesContainer.appendChild(card);
+  });
+
+  // Append "+ Tambah Orang Baru" button card
+  const addCard = document.createElement('div');
+  addCard.className = 'btn-add-class-card';
+  addCard.id = 'btnAddClassCard';
+  addCard.innerHTML = `
+    <i class="ph ph-plus-circle"></i>
+    <strong style="font-size:0.95rem;">Tambah Orang Baru</strong>
+    <span style="font-size:0.78rem;">Buat kelas baru untuk dilatih</span>
+  `;
+  addCard.addEventListener('click', () => addNewClass());
+  DOM.classesContainer.appendChild(addCard);
+
+  // Attach event listeners to card elements
+  $$('.class-name-input').forEach(input => {
+    input.addEventListener('change', (e) => {
+      const cls = state.browserClasses.find(c => c.id === e.target.dataset.classId);
+      if (cls) {
+        cls.name = e.target.value.trim() || 'Orang';
+        saveBrowserClasses();
+      }
+    });
+  });
+
+  $$('.btn-remove-class').forEach(btn => {
+    btn.addEventListener('click', () => {
+      removeClass(btn.dataset.classId);
+    });
+  });
+
+  $$('.btn-upload-class').forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeUploadClassId = btn.dataset.classId;
+      DOM.classUploadInput.click();
+    });
+  });
+
+  $$('.btn-webcam-class').forEach(btn => {
+    btn.addEventListener('click', () => {
+      openWebcamModal(btn.dataset.classId);
+    });
+  });
+
+  $$('.btn-delete-thumb').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const classId = btn.dataset.classId;
+      const photoIdx = parseInt(btn.dataset.photoIdx, 10);
+      deletePhotoFromClass(classId, photoIdx);
+    });
+  });
+}
+
+function addNewClass(name = '') {
+  const count = state.browserClasses.length + 1;
+  const newClass = {
+    id: 'class_' + Date.now(),
+    name: name || `Orang ${count}`,
+    photos: []
+  };
+  state.browserClasses.push(newClass);
+  saveBrowserClasses();
+  renderBrowserClasses();
+  showToast(`Kelas "${newClass.name}" berhasil ditambahkan.`, 'info');
+}
+
+function removeClass(id) {
+  state.browserClasses = state.browserClasses.filter(c => c.id !== id);
+  saveBrowserClasses();
+  renderBrowserClasses();
+  showToast('Orang dihapus dari daftar.', 'info');
+}
+
+function deletePhotoFromClass(classId, photoIndex) {
+  const cls = state.browserClasses.find(c => c.id === classId);
+  if (cls && cls.photos[photoIndex] !== undefined) {
+    cls.photos.splice(photoIndex, 1);
+    saveBrowserClasses();
+    renderBrowserClasses();
+  }
+}
+
+// Handle multi-image file selection for a class
+function handleClassFilesSelected(e) {
+  const files = e.target.files;
+  if (!files || files.length === 0 || !activeUploadClassId) return;
+
+  const cls = state.browserClasses.find(c => c.id === activeUploadClassId);
+  if (!cls) return;
+
+  let loaded = 0;
+  const total = files.length;
+  showToast(`Memproses ${total} foto...`, 'info');
+
+  Array.from(files).forEach(file => {
+    if (!file.type.startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      // Compress slightly to avoid browser memory blowup
+      compressImage(event.target.result, 800, 800, (compressedDataUrl) => {
+        cls.photos.push(compressedDataUrl);
+        loaded++;
+        if (loaded === total) {
+          saveBrowserClasses();
+          renderBrowserClasses();
+          showToast(`Berhasil menambahkan ${loaded} foto untuk ${cls.name}!`, 'success');
+        }
+      });
+    };
+    reader.readAsDataURL(file);
+  });
+
+  e.target.value = '';
+}
+
+function compressImage(dataUrl, maxWidth, maxHeight, callback) {
+  const img = new Image();
+  img.onload = () => {
+    let width = img.width;
+    let height = img.height;
+    if (width > height) {
+      if (width > maxWidth) {
+        height = Math.round((height * maxWidth) / width);
+        width = maxWidth;
+      }
+    } else {
+      if (height > maxHeight) {
+        width = Math.round((width * maxHeight) / height);
+        height = maxHeight;
+      }
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, width, height);
+    callback(canvas.toDataURL('image/jpeg', 0.88));
+  };
+  img.src = dataUrl;
+}
+
+// ============================================
+//  Webcam Modal Snapshot Capture
+// ============================================
+async function openWebcamModal(classId) {
+  const cls = state.browserClasses.find(c => c.id === classId);
+  if (!cls) return;
+
+  state.currentModalClassId = classId;
+  DOM.tmModalPersonName.textContent = cls.name;
+  DOM.tmWebcamModal.style.display = 'flex';
+
+  try {
+    state.modalWebcamStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 640 }, height: { ideal: 480 } }
+    });
+    DOM.tmModalVideo.srcObject = state.modalWebcamStream;
+  } catch (err) {
+    console.error('Modal webcam error:', err);
+    showToast('Gagal mengakses webcam. Pastikan izin kamera aktif.', 'error');
+    closeWebcamModal();
+  }
+}
+
+function closeWebcamModal() {
+  if (state.modalWebcamStream) {
+    state.modalWebcamStream.getTracks().forEach(t => t.stop());
+    state.modalWebcamStream = null;
+  }
+  DOM.tmModalVideo.srcObject = null;
+  DOM.tmWebcamModal.style.display = 'none';
+  state.currentModalClassId = null;
+  renderBrowserClasses();
+}
+
+function snapWebcamPhoto() {
+  if (!state.currentModalClassId || !DOM.tmModalVideo.videoWidth) return;
+  const cls = state.browserClasses.find(c => c.id === state.currentModalClassId);
+  if (!cls) return;
+
+  const canvas = DOM.tmModalCanvas;
+  canvas.width = DOM.tmModalVideo.videoWidth;
+  canvas.height = DOM.tmModalVideo.videoHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(DOM.tmModalVideo, 0, 0, canvas.width, canvas.height);
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+
+  cls.photos.push(dataUrl);
+  saveBrowserClasses();
+
+  // Visual flash effect
+  DOM.tmModalVideo.style.filter = 'brightness(2)';
+  setTimeout(() => { DOM.tmModalVideo.style.filter = 'none'; }, 100);
+
+  showToast(`Foto ditambahkan (${cls.photos.length} total)`, 'info');
+}
+
+async function snapBurstWebcamPhotos(count = 5) {
+  if (!state.currentModalClassId) return;
+  DOM.btnSnapBurst.disabled = true;
+  DOM.btnSnapSingle.disabled = true;
+
+  for (let i = 0; i < count; i++) {
+    snapWebcamPhoto();
+    await new Promise(r => setTimeout(r, 260));
+  }
+
+  DOM.btnSnapBurst.disabled = false;
+  DOM.btnSnapSingle.disabled = false;
+  showToast(`Burst selesai! ${count} foto berhasil diambil.`, 'success');
+}
+
+// ============================================
+//  Training Engine: Browser Studio Classes
+// ============================================
+async function startStudioTraining() {
+  if (!state.isModelLoaded) {
+    showToast('AI Model belum siap. Tunggu sebentar...', 'warning');
+    return;
+  }
+
+  const validClasses = state.browserClasses.filter(c => c.photos && c.photos.length > 0);
+  if (validClasses.length === 0) {
+    showToast('Belum ada foto yang ditambahkan. Silakan upload foto atau gunakan webcam!', 'warning');
+    return;
+  }
+
+  const totalPhotos = validClasses.reduce((sum, c) => sum + c.photos.length, 0);
+
+  DOM.btnStartTrainingStudio.disabled = true;
+  DOM.btnStartTrainingStudio.innerHTML = '<i class="ph ph-spinner"></i> Sedang Melatih...';
+  DOM.trainingStatusBox.style.display = 'block';
+
+  let processedCount = 0;
+  let detectedCount = 0;
+  const newLabeledDescriptors = [];
+  const startTime = Date.now();
+
+  try {
+    for (const cls of validClasses) {
+      DOM.trainingCurrentPerson.textContent = `Memproses: ${cls.name}`;
+      const descriptors = [];
+
+      for (let i = 0; i < cls.photos.length; i++) {
+        processedCount++;
+        const pct = Math.round((processedCount / totalPhotos) * 100);
+        DOM.trainingProgressBar.style.width = `${pct}%`;
+        DOM.trainingProgressText.textContent = `${pct}%`;
+
+        const photoData = cls.photos[i];
+        DOM.trainingPreviewThumb.innerHTML = `<img src="${photoData}" style="width:100%; height:100%; object-fit:cover;">`;
+        DOM.trainingLiveLog.textContent = `Mengekstrak 128-D embedding: ${cls.name} (${i + 1}/${cls.photos.length})...`;
+
+        try {
+          const img = await loadImageFromDataUrl(photoData);
+          const detection = await faceapi
+            .detectSingleFace(img, new faceapi.SsdMobilenetv1Options(CONFIG.detectionOptions))
+            .withFaceLandmarks()
+            .withFaceDescriptor();
+
+          if (detection) {
+            descriptors.push(Array.from(detection.descriptor));
+            detectedCount++;
+            const score = Math.round(detection.detection.score * 100);
+            DOM.trainingLiveLog.innerHTML = `✅ Wajah <strong>${cls.name}</strong> terdeteksi (${score}% confidence)`;
+          } else {
+            DOM.trainingLiveLog.innerHTML = `⚠️ <span style="color:var(--warning)">Wajah tidak terdeteksi pada sampel foto ke-${i + 1}</span>`;
+          }
+        } catch (err) {
+          console.error(err);
+          DOM.trainingLiveLog.innerHTML = `❌ Error memproses foto ke-${i + 1}`;
+        }
+
+        // Yield for UI paint
+        await new Promise(r => setTimeout(r, 40));
+      }
+
+      if (descriptors.length > 0) {
+        newLabeledDescriptors.push({
+          label: cls.name,
+          descriptors: descriptors
+        });
+      }
+    }
+
+    if (newLabeledDescriptors.length === 0) {
+      showToast('Tidak ada wajah yang berhasil dideteksi dalam foto yang diunggah.', 'error');
+      DOM.trainingLiveLog.innerHTML = '<span style="color:var(--danger)">Training gagal: Tidak ada wajah yang jelas terdeteksi.</span>';
       return;
     }
-    
-    // Convert to face-api.js LabeledFaceDescriptors
-    state.labeledDescriptors = descriptorsData.map(item => {
+
+    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+    const detectionRate = Math.round((detectedCount / totalPhotos) * 100);
+
+    const outputData = {
+      metadata: {
+        createdAt: new Date().toISOString(),
+        totalPersons: newLabeledDescriptors.length,
+        totalImages: totalPhotos,
+        totalDetected: detectedCount,
+        detectionRate: `${detectionRate}%`,
+        trainingDuration: `${duration}s`,
+        modelVersion: 'SSD MobileNet v1 + ResNet-34'
+      },
+      descriptors: newLabeledDescriptors
+    };
+
+    // 1. Save to server via API (if available)
+    try {
+      DOM.trainingLiveLog.textContent = 'Menyimpan model ke server...';
+      const saveRes = await fetch(CONFIG.saveDescriptorsUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(outputData)
+      });
+      if (saveRes.ok) {
+        console.log('Model saved to server labeled_descriptors.json');
+      }
+    } catch (apiErr) {
+      console.warn('Could not save to backend API, keeping in browser cache:', apiErr);
+    }
+
+    // 2. Save to browser LocalStorage (guarantees persistence even on static hosting)
+    try {
+      localStorage.setItem('faceid_descriptors', JSON.stringify(outputData));
+    } catch (e) { /* ignore */ }
+
+    // 3. Immediately activate model in memory
+    state.metadata = outputData.metadata;
+    state.rawDescriptorsData = outputData.descriptors;
+    state.labeledDescriptors = newLabeledDescriptors.map(item => {
       const descriptors = item.descriptors.map(d => new Float32Array(d));
       return new faceapi.LabeledFaceDescriptors(item.label, descriptors);
     });
-    
-    // Create FaceMatcher
-    state.faceMatcher = new faceapi.FaceMatcher(
-      state.labeledDescriptors, 
-      state.threshold
-    );
-    
-    // Update stats
-    const totalDescs = descriptorsData.reduce((sum, item) => sum + item.descriptors.length, 0);
-    DOM.statPersons.textContent = descriptorsData.length;
-    DOM.dsPersonCount.textContent = descriptorsData.length;
+    state.faceMatcher = new faceapi.FaceMatcher(state.labeledDescriptors, state.threshold);
+
+    // Update stats and UI
+    const totalDescs = newLabeledDescriptors.reduce((sum, item) => sum + item.descriptors.length, 0);
+    DOM.statPersons.textContent = newLabeledDescriptors.length;
+    DOM.dsPersonCount.textContent = newLabeledDescriptors.length;
     DOM.dsDescCount.textContent = totalDescs;
-    
-    // Update metadata display
-    if (state.metadata) {
-      DOM.statImages.textContent = state.metadata.totalImages || 0;
-      DOM.dsImageCount.textContent = state.metadata.totalImages || 0;
-      if (state.metadata.createdAt) {
-        const date = new Date(state.metadata.createdAt);
-        DOM.dsTrainDate.textContent = date.toLocaleDateString('id-ID', {
-          day: 'numeric', month: 'short', year: 'numeric'
-        });
-      }
-    }
-    
-    // Update dataset persons list
-    updateDatasetPersonsList(descriptorsData);
-    
+    DOM.statImages.textContent = totalPhotos;
+    DOM.dsImageCount.textContent = totalPhotos;
+    updateDatasetPersonsList(newLabeledDescriptors);
     updateStatus('ready', 'Ready');
-    showToast(`${descriptorsData.length} orang berhasil dimuat ke dalam sistem.`, 'success');
-    
+
+    DOM.trainingLiveLog.innerHTML = `<strong>🎉 Selesai!</strong> Berhasil melatih ${newLabeledDescriptors.length} orang (${detectedCount}/${totalPhotos} wajah) dalam ${duration} detik. Model aktif seketika!`;
+    showToast(`🎉 Training Selesai! ${newLabeledDescriptors.length} orang siap dikenali.`, 'success');
+
   } catch (error) {
-    console.error('Failed to load descriptors:', error);
-    showToast('Gagal memuat data training.', 'error');
-    updateStatus('error', 'Error');
-  }
-}
-
-async function loadDatasetInfo() {
-  try {
-    const response = await fetch(CONFIG.datasetInfoUrl);
-    if (!response.ok) return;
-    
-    const data = await response.json();
-    if (data.totalImages !== undefined) {
-      DOM.statImages.textContent = data.totalImages;
-      DOM.dsImageCount.textContent = data.totalImages;
-    }
-    
-    // Render classes/folders in Training Tab
-    if (DOM.trainPersonsList) {
-      DOM.trainPersonsList.innerHTML = '';
-      if (!data.persons || data.persons.length === 0) {
-        DOM.trainPersonsList.innerHTML = `
-          <div style="grid-column: 1/-1; padding: 25px; text-align:center; color: var(--text-muted); background: var(--bg-glass); border-radius: 12px; border: 1px dashed var(--border-primary);">
-            <i class="ph ph-folder-dashed" style="font-size: 2.2rem; margin-bottom: 8px; display: block; color: var(--accent-primary);"></i>
-            <strong style="color: var(--text-primary); display:block; margin-bottom:4px;">Folder dataset masih kosong</strong>
-            Buka folder <code>dataset/</code> di laptop Anda, buat folder nama teman (misal: <code>dataset/Budi/</code>), lalu masukkan foto-foto mereka.
-          </div>
-        `;
-      } else {
-        const colors = [
-          'linear-gradient(135deg, #6366f1, #8b5cf6)',
-          'linear-gradient(135deg, #8b5cf6, #d946ef)',
-          'linear-gradient(135deg, #ec4899, #f43f5e)',
-          'linear-gradient(135deg, #f59e0b, #ef4444)',
-          'linear-gradient(135deg, #10b981, #3b82f6)'
-        ];
-        data.persons.forEach((p, idx) => {
-          const card = document.createElement('div');
-          card.className = 'person-card';
-          const thumbHtml = p.images && p.images.length > 0 
-            ? `<img src="${p.images[0]}" style="width:40px; height:40px; border-radius:8px; object-fit:cover;">`
-            : `<div class="person-avatar" style="background: ${colors[idx % colors.length]}">${p.name.substring(0,2).toUpperCase()}</div>`;
-          
-          card.innerHTML = `
-            ${thumbHtml}
-            <div class="person-info">
-              <div class="person-name">${p.name}</div>
-              <div class="person-count">${p.imageCount} foto ditemukan</div>
-            </div>
-          `;
-          DOM.trainPersonsList.appendChild(card);
-        });
-      }
-    }
-    
-    return data;
-  } catch (e) {
-    console.warn('Dataset info load error:', e);
+    console.error('Training error:', error);
+    showToast('Terjadi kesalahan selama training.', 'error');
+  } finally {
+    DOM.btnStartTrainingStudio.disabled = false;
+    DOM.btnStartTrainingStudio.innerHTML = '<i class="ph ph-play"></i> Latih Ulang Model';
   }
 }
 
 // ============================================
-//  In-Browser Training Engine
+//  Training Engine: Server Dataset Folder
 // ============================================
-async function startDatasetTraining() {
+async function startServerDatasetTraining() {
   if (!state.isModelLoaded) {
-    showToast('AI Model belum siap. Tunggu hingga loading selesai.', 'warning');
+    showToast('AI Model belum siap. Tunggu sebentar...', 'warning');
     return;
   }
 
@@ -263,18 +820,14 @@ async function startDatasetTraining() {
   try {
     const datasetData = await loadDatasetInfo();
     if (!datasetData || !datasetData.persons || datasetData.persons.length === 0) {
-      showToast('Tidak ada folder person di dataset/!', 'error');
-      DOM.trainingLiveLog.innerHTML = '<span style="color:var(--danger)">Folder dataset kosong. Buat folder nama teman terlebih dahulu.</span>';
-      DOM.btnStartTraining.disabled = false;
-      DOM.btnStartTraining.innerHTML = '<i class="ph ph-play"></i> Mulai Latih Dataset';
+      showToast('Tidak ada folder person di dataset/ server.', 'error');
+      DOM.trainingLiveLog.innerHTML = '<span style="color:var(--danger)">Folder dataset server kosong. Gunakan "Studio Web" untuk melatih dari browser!</span>';
       return;
     }
 
     const totalImages = datasetData.totalImages;
     if (totalImages === 0) {
-      showToast('Tidak ada foto yang ditemukan di dalam folder dataset.', 'warning');
-      DOM.btnStartTraining.disabled = false;
-      DOM.btnStartTraining.innerHTML = '<i class="ph ph-play"></i> Mulai Latih Dataset';
+      showToast('Tidak ada foto yang ditemukan di folder dataset.', 'warning');
       return;
     }
 
@@ -286,28 +839,21 @@ async function startDatasetTraining() {
     for (const person of datasetData.persons) {
       DOM.trainingCurrentPerson.textContent = `Memproses: ${person.name}`;
       const descriptors = [];
+      const imagesList = person.images || [];
 
-      for (const imgUrl of person.images) {
+      for (const imgUrl of imagesList) {
         processedCount++;
         const pct = Math.round((processedCount / totalImages) * 100);
         DOM.trainingProgressBar.style.width = `${pct}%`;
         DOM.trainingProgressText.textContent = `${pct}%`;
 
-        // Update preview image
-        DOM.trainingPreviewThumb.innerHTML = `<img src="${imgUrl}" style="width:100%; height:100%; object-fit:cover;">`;
+        DOM.trainingPreviewThumb.innerHTML = `<img src="${imgUrl}" style="width:100%; height:100%; object-fit:cover;" onerror="this.onerror=null;">`;
         DOM.trainingLiveLog.textContent = `Menganalisis wajah: ${person.name} (${processedCount}/${totalImages})...`;
 
         try {
-          const img = await new Promise((resolve, reject) => {
-            const i = new Image();
-            i.onload = () => resolve(i);
-            i.onerror = () => reject(new Error('Gagal load gambar'));
-            i.src = imgUrl;
-          });
-
-          // Detect face with ResNet-34 descriptor
+          const img = await loadImageFromDataUrl(imgUrl);
           const detection = await faceapi
-            .detectSingleFace(img, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
+            .detectSingleFace(img, new faceapi.SsdMobilenetv1Options(CONFIG.detectionOptions))
             .withFaceLandmarks()
             .withFaceDescriptor();
 
@@ -324,8 +870,7 @@ async function startDatasetTraining() {
           DOM.trainingLiveLog.innerHTML = `❌ Error pada file: ${imgUrl}`;
         }
 
-        // Small yield for UI refresh
-        await new Promise(r => setTimeout(r, 60));
+        await new Promise(r => setTimeout(r, 40));
       }
 
       if (descriptors.length > 0) {
@@ -353,28 +898,117 @@ async function startDatasetTraining() {
     };
 
     // Save to server
-    DOM.trainingLiveLog.textContent = 'Menyimpan model ke labeled_descriptors.json...';
-    const saveRes = await fetch('/api/save-descriptors', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(outputData)
-    });
-
-    if (saveRes.ok) {
-      await loadDescriptors();
-      showToast(`🎉 Training Selesai! ${detectedCount} wajah berhasil dipelajari (${detectionRate}% akurasi deteksi).`, 'success');
-      DOM.trainingLiveLog.innerHTML = `<strong>🎉 Selesai!</strong> Berhasil melatih ${labeledDescriptors.length} orang (${detectedCount}/${totalImages} wajah) dalam ${duration} detik. Siap digunakan!`;
-    } else {
-      showToast('Gagal menyimpan file hasil training.', 'error');
+    try {
+      await fetch(CONFIG.saveDescriptorsUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(outputData)
+      });
+    } catch (e) {
+      console.warn('Save to API failed:', e);
     }
 
+    // Cache to localStorage
+    try {
+      localStorage.setItem('faceid_descriptors', JSON.stringify(outputData));
+    } catch (e) { /* ignore */ }
+
+    await loadDescriptors();
+    showToast(`🎉 Training Selesai! ${detectedCount} wajah berhasil dipelajari.`, 'success');
+    DOM.trainingLiveLog.innerHTML = `<strong>🎉 Selesai!</strong> Berhasil melatih ${labeledDescriptors.length} orang (${detectedCount}/${totalImages} wajah) dalam ${duration} detik. Siap digunakan!`;
+
   } catch (error) {
-    console.error('Training error:', error);
-    showToast('Terjadi kesalahan selama training.', 'error');
+    console.error('Server training error:', error);
+    showToast('Terjadi kesalahan selama training dataset server.', 'error');
   } finally {
     DOM.btnStartTraining.disabled = false;
-    DOM.btnStartTraining.innerHTML = '<i class="ph ph-play"></i> Latih Ulang Dataset';
+    DOM.btnStartTraining.innerHTML = '<i class="ph ph-play"></i> Latih Ulang Dataset Server';
   }
+}
+
+function loadImageFromDataUrl(url) {
+  return new Promise((resolve, reject) => {
+    const i = new Image();
+    i.crossOrigin = 'anonymous';
+    i.onload = () => resolve(i);
+    i.onerror = () => reject(new Error('Gagal memuat gambar: ' + url));
+    i.src = url;
+  });
+}
+
+// ============================================
+//  Export & Import JSON Model Files
+// ============================================
+function exportDescriptorsJson() {
+  if (!state.rawDescriptorsData || state.rawDescriptorsData.length === 0) {
+    showToast('Belum ada model yang dilatih untuk diunduh.', 'warning');
+    return;
+  }
+
+  const exportPayload = {
+    metadata: state.metadata || {
+      createdAt: new Date().toISOString(),
+      totalPersons: state.rawDescriptorsData.length,
+      modelVersion: 'SSD MobileNet v1 + ResNet-34'
+    },
+    descriptors: state.rawDescriptorsData
+  };
+
+  const jsonStr = JSON.stringify(exportPayload, null, 2);
+  const blob = new Blob([jsonStr], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'labeled_descriptors.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  showToast('File labeled_descriptors.json berhasil diunduh!', 'success');
+}
+
+function handleImportJsonFile(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = async (event) => {
+    try {
+      const data = JSON.parse(event.target.result);
+      const descriptorsData = data.descriptors || (Array.isArray(data) ? data : null);
+
+      if (!descriptorsData || descriptorsData.length === 0) {
+        showToast('Format file JSON tidak valid atau data descriptors kosong.', 'error');
+        return;
+      }
+
+      // Try sending to server
+      try {
+        await fetch(CONFIG.saveDescriptorsUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+      } catch (err) {
+        console.warn('Could not post imported JSON to server API:', err);
+      }
+
+      // Save to localStorage
+      try {
+        localStorage.setItem('faceid_descriptors', JSON.stringify(data));
+      } catch (err) { /* ignore */ }
+
+      // Reload
+      await loadDescriptors();
+      showToast(`🎉 Sukses mengimpor model dengan ${descriptorsData.length} orang!`, 'success');
+    } catch (err) {
+      console.error('Import JSON error:', err);
+      showToast('Gagal membaca file JSON. Pastikan format valid.', 'error');
+    }
+  };
+  reader.readAsText(file);
+  e.target.value = '';
 }
 
 // ============================================
@@ -386,7 +1020,7 @@ function setupEventListeners() {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
   });
   
-  // File upload
+  // File upload for Recognition
   DOM.uploadArea.addEventListener('click', () => DOM.fileInput.click());
   DOM.fileInput.addEventListener('change', handleFileSelect);
   
@@ -404,20 +1038,84 @@ function setupEventListeners() {
   // Clear button
   DOM.btnClear.addEventListener('click', clearResults);
   
-  // Webcam
+  // Webcam recognition
   DOM.btnStartWebcam.addEventListener('click', startWebcam);
   DOM.btnStopWebcam.addEventListener('click', stopWebcam);
 
-  // Training
+  // Training mode switch
+  if (DOM.btnModeBrowser && DOM.btnModeServer) {
+    DOM.btnModeBrowser.addEventListener('click', () => {
+      DOM.btnModeBrowser.classList.add('active');
+      DOM.btnModeServer.classList.remove('active');
+      DOM.browserTrainingView.style.display = 'block';
+      DOM.serverTrainingView.style.display = 'none';
+    });
+    DOM.btnModeServer.addEventListener('click', () => {
+      DOM.btnModeServer.classList.add('active');
+      DOM.btnModeBrowser.classList.remove('active');
+      DOM.serverTrainingView.style.display = 'block';
+      DOM.browserTrainingView.style.display = 'none';
+      loadDatasetInfo();
+    });
+  }
+
+  // Teachable Machine Studio Actions
+  if (DOM.btnAddNewClass) {
+    DOM.btnAddNewClass.addEventListener('click', () => addNewClass());
+  }
+  if (DOM.btnStartTrainingStudio) {
+    DOM.btnStartTrainingStudio.addEventListener('click', startStudioTraining);
+  }
+  if (DOM.btnExportJson) {
+    DOM.btnExportJson.addEventListener('click', exportDescriptorsJson);
+  }
+  if (DOM.btnExportJsonDs) {
+    DOM.btnExportJsonDs.addEventListener('click', exportDescriptorsJson);
+  }
+  if (DOM.btnImportJson) {
+    DOM.btnImportJson.addEventListener('click', () => DOM.importJsonInput.click());
+  }
+  if (DOM.btnImportJsonDs) {
+    DOM.btnImportJsonDs.addEventListener('click', () => DOM.importJsonInput.click());
+  }
+  if (DOM.importJsonInput) {
+    DOM.importJsonInput.addEventListener('change', handleImportJsonFile);
+  }
+  if (DOM.classUploadInput) {
+    DOM.classUploadInput.addEventListener('change', handleClassFilesSelected);
+  }
+  if (DOM.btnReloadDataset) {
+    DOM.btnReloadDataset.addEventListener('click', () => {
+      showToast('Memuat ulang dataset...', 'info');
+      loadDescriptors();
+      loadDatasetInfo();
+    });
+  }
+
+  // Server training
   if (DOM.btnRefreshDataset) {
     DOM.btnRefreshDataset.addEventListener('click', async () => {
-      showToast('Memindai folder dataset...', 'info');
+      showToast('Memindai folder dataset server...', 'info');
       await loadDatasetInfo();
       showToast('Daftar folder dataset berhasil diperbarui.', 'success');
     });
   }
   if (DOM.btnStartTraining) {
-    DOM.btnStartTraining.addEventListener('click', startDatasetTraining);
+    DOM.btnStartTraining.addEventListener('click', startServerDatasetTraining);
+  }
+
+  // Modal Webcam Capture Actions
+  if (DOM.btnCloseTmModal) {
+    DOM.btnCloseTmModal.addEventListener('click', closeWebcamModal);
+  }
+  if (DOM.btnFinishModal) {
+    DOM.btnFinishModal.addEventListener('click', closeWebcamModal);
+  }
+  if (DOM.btnSnapSingle) {
+    DOM.btnSnapSingle.addEventListener('click', snapWebcamPhoto);
+  }
+  if (DOM.btnSnapBurst) {
+    DOM.btnSnapBurst.addEventListener('click', () => snapBurstWebcamPhotos(5));
   }
 }
 
@@ -425,12 +1123,10 @@ function setupEventListeners() {
 //  Tab Navigation
 // ============================================
 function switchTab(tabName) {
-  // Update buttons
   $$('.tab-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.tab === tabName);
   });
   
-  // Update content
   $$('.tab-content').forEach(content => {
     content.classList.remove('active');
   });
@@ -440,14 +1136,13 @@ function switchTab(tabName) {
     targetTab.classList.add('active');
   }
   
-  // Stop webcam if switching away
   if (tabName !== 'webcam' && state.webcamStream) {
     stopWebcam();
   }
 }
 
 // ============================================
-//  File Upload Handlers
+//  File Upload Handlers (Recognition)
 // ============================================
 function handleDragOver(e) {
   e.preventDefault();
@@ -474,7 +1169,6 @@ function handleFileSelect(e) {
   if (files.length > 0) {
     processFile(files[0]);
   }
-  // Reset input so the same file can be selected again
   e.target.value = '';
 }
 
@@ -503,8 +1197,8 @@ async function processFile(file) {
     return;
   }
   
-  if (file.size > 10 * 1024 * 1024) {
-    showToast('Ukuran file terlalu besar (max 10MB)', 'error');
+  if (file.size > 15 * 1024 * 1024) {
+    showToast('Ukuran file terlalu besar (max 15MB)', 'error');
     return;
   }
   
@@ -514,26 +1208,20 @@ async function processFile(file) {
   }
   
   if (!state.faceMatcher) {
-    showToast('Belum ada data training. Jalankan "npm run train" terlebih dahulu.', 'warning');
+    showToast('Belum ada data training. Latih foto terlebih dahulu di tab "Latih Model"!', 'warning');
     return;
   }
   
-  // Show processing state
   showProcessing();
   
   try {
-    // Load image
     const img = await loadImageFromFile(file);
-    
-    // Display preview
     DOM.previewImage.src = img.src;
     DOM.previewImage.onload = async () => {
-      // Setup canvas
       const canvas = DOM.overlayCanvas;
       canvas.width = DOM.previewImage.naturalWidth;
       canvas.height = DOM.previewImage.naturalHeight;
       
-      // Detect faces
       const detections = await faceapi
         .detectAllFaces(DOM.previewImage, new faceapi.SsdMobilenetv1Options(CONFIG.detectionOptions))
         .withFaceLandmarks()
@@ -547,16 +1235,11 @@ async function processFile(file) {
         return;
       }
       
-      // Match faces
       const results = detections.map(detection => {
         const match = state.faceMatcher.findBestMatch(detection.descriptor);
-        return {
-          detection: detection,
-          match: match
-        };
+        return { detection, match };
       });
       
-      // Draw results
       drawDetections(canvas, results);
       displayResults(results);
       
@@ -601,18 +1284,16 @@ function drawDetections(canvas, results) {
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   
-  results.forEach((result, index) => {
+  results.forEach((result) => {
     const box = result.detection.detection.box;
     const label = result.match.label;
     const distance = result.match.distance;
     const confidence = Math.max(0, ((1 - distance) * 100)).toFixed(1);
     const isKnown = label !== 'unknown';
     
-    // Colors
     const color = isKnown ? '#10b981' : '#ef4444';
     const bgColor = isKnown ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)';
     
-    // Draw box
     ctx.strokeStyle = color;
     ctx.lineWidth = 3;
     ctx.setLineDash([]);
@@ -622,39 +1303,33 @@ function drawDetections(canvas, results) {
     const cornerLength = Math.min(box.width, box.height) * 0.15;
     ctx.lineWidth = 4;
     
-    // Top-left
     ctx.beginPath();
     ctx.moveTo(box.x, box.y + cornerLength);
     ctx.lineTo(box.x, box.y);
     ctx.lineTo(box.x + cornerLength, box.y);
     ctx.stroke();
     
-    // Top-right
     ctx.beginPath();
     ctx.moveTo(box.x + box.width - cornerLength, box.y);
     ctx.lineTo(box.x + box.width, box.y);
     ctx.lineTo(box.x + box.width, box.y + cornerLength);
     ctx.stroke();
     
-    // Bottom-left
     ctx.beginPath();
     ctx.moveTo(box.x, box.y + box.height - cornerLength);
     ctx.lineTo(box.x, box.y + box.height);
     ctx.lineTo(box.x + cornerLength, box.y + box.height);
     ctx.stroke();
     
-    // Bottom-right
     ctx.beginPath();
     ctx.moveTo(box.x + box.width - cornerLength, box.y + box.height);
     ctx.lineTo(box.x + box.width, box.y + box.height);
     ctx.lineTo(box.x + box.width, box.y + box.height - cornerLength);
     ctx.stroke();
     
-    // Draw semi-transparent fill
     ctx.fillStyle = bgColor;
     ctx.fillRect(box.x, box.y, box.width, box.height);
     
-    // Draw subtle landmark points if available
     if (result.detection && result.detection.landmarks) {
       const landmarks = result.detection.landmarks;
       ctx.fillStyle = 'rgba(99, 241, 218, 0.75)';
@@ -666,7 +1341,6 @@ function drawDetections(canvas, results) {
       });
     }
 
-    // Draw label background
     const labelText = isKnown ? `${label} (${confidence}%)` : `Tidak Dikenali`;
     const fontSize = Math.max(13, Math.min(20, box.width * 0.065));
     ctx.font = `600 ${fontSize}px Inter, sans-serif`;
@@ -675,11 +1349,9 @@ function drawDetections(canvas, results) {
     const labelPadding = 10;
     const labelWidth = textMetrics.width + labelPadding * 2;
     
-    // Label position (above box, or inside box if too close to top)
     const labelX = Math.max(0, box.x);
     const labelY = (box.y - labelHeight - 6 < 0) ? (box.y + 6) : (box.y - labelHeight - 6);
     
-    // Draw label bg
     ctx.fillStyle = color;
     if (ctx.roundRect) {
       ctx.beginPath();
@@ -689,7 +1361,6 @@ function drawDetections(canvas, results) {
       ctx.fillRect(labelX, labelY, labelWidth, labelHeight);
     }
     
-    // Draw label text
     ctx.fillStyle = '#ffffff';
     ctx.textBaseline = 'middle';
     ctx.fillText(labelText, labelX + labelPadding, labelY + labelHeight / 2);
@@ -738,7 +1409,6 @@ function displayResults(results) {
     
     DOM.resultsList.appendChild(item);
     
-    // Animate confidence bar
     requestAnimationFrame(() => {
       setTimeout(() => {
         const bar = item.querySelector('.confidence-bar-fill');
@@ -761,11 +1431,11 @@ function clearResults() {
 }
 
 // ============================================
-//  Webcam
+//  Webcam Recognition
 // ============================================
 async function startWebcam() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    showToast('Akses kamera tidak diizinkan di protokol ini. Pastikan Anda membuka web lewat http://localhost:5000 (bukan file:///...)', 'error');
+    showToast('Akses kamera tidak diizinkan di browser ini.', 'error');
     return;
   }
 
@@ -775,7 +1445,7 @@ async function startWebcam() {
   }
   
   if (!state.faceMatcher) {
-    showToast('Info: Dataset belum dilatih. Anda bisa melatih foto di tab "Latih Model". Wajah akan terdeteksi sebagai "Tidak Dikenali".', 'info');
+    showToast('Info: Dataset belum dilatih. Wajah akan terdeteksi sebagai "Tidak Dikenali".', 'info');
   }
   
   try {
@@ -783,8 +1453,7 @@ async function startWebcam() {
       state.webcamStream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 640 }, height: { ideal: 480 } }
       });
-    } catch (constraintError) {
-      console.warn('Initial webcam constraint failed, falling back to basic video:', constraintError);
+    } catch (e) {
       state.webcamStream = await navigator.mediaDevices.getUserMedia({ video: true });
     }
     
@@ -796,27 +1465,15 @@ async function startWebcam() {
     
     showToast('Webcam aktif! Mendeteksi wajah...', 'success');
     
-    // Wait for video to be ready
     DOM.webcamVideo.addEventListener('playing', () => {
-      // Setup canvas
       DOM.webcamCanvas.width = DOM.webcamVideo.videoWidth;
       DOM.webcamCanvas.height = DOM.webcamVideo.videoHeight;
-      
-      // Start detection loop
       state.webcamDetectionInterval = setInterval(detectWebcamFaces, CONFIG.webcamInterval);
     }, { once: true });
     
   } catch (error) {
     console.error('Webcam error:', error);
-    if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
-      showToast('Izin kamera ditolak! Klik ikon gembok/kamera di sebelah kiri alamat URL browser, lalu ubah Izin Kamera menjadi "Izinkan" (Allow) dan refresh.', 'error');
-    } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
-      showToast('Kamera sedang dipakai aplikasi lain (Zoom, Teams, OBS, atau tab browser lain). Tutup aplikasi tersebut.', 'error');
-    } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
-      showToast('Webcam tidak ditemukan. Pastikan kamera terpasang dan switch privasi fisik kamera di laptop dalam posisi terbuka.', 'error');
-    } else {
-      showToast(`Gagal mengakses webcam: ${error.message || error.name}. Pastikan izin kamera aktif.`, 'error');
-    }
+    showToast(`Gagal mengakses webcam: ${error.message || error.name}. Pastikan izin kamera aktif.`, 'error');
   }
 }
 
@@ -862,12 +1519,6 @@ async function detectWebcamFaces() {
       return;
     }
     
-    // Resize detections to match display size
-    const displaySize = { 
-      width: DOM.webcamVideo.videoWidth, 
-      height: DOM.webcamVideo.videoHeight 
-    };
-    
     const results = detections.map(detection => {
       const match = state.faceMatcher 
         ? state.faceMatcher.findBestMatch(detection.descriptor)
@@ -875,10 +1526,8 @@ async function detectWebcamFaces() {
       return { detection, match };
     });
     
-    // Draw on canvas
     drawDetections(canvas, results);
     
-    // Update results sidebar
     DOM.webcamResults.innerHTML = results.map(result => {
       const label = result.match.label;
       const distance = result.match.distance;
@@ -906,7 +1555,7 @@ async function detectWebcamFaces() {
     }).join('');
     
   } catch (error) {
-    // Silently fail on detection errors during webcam
+    // Silently continue loop
   }
 }
 
@@ -917,7 +1566,6 @@ function handleThresholdChange(e) {
   state.threshold = parseFloat(e.target.value);
   DOM.thresholdValue.textContent = state.threshold.toFixed(2);
   
-  // Recreate FaceMatcher with new threshold
   if (state.labeledDescriptors.length > 0) {
     state.faceMatcher = new faceapi.FaceMatcher(
       state.labeledDescriptors, 
@@ -971,7 +1619,7 @@ function hideLoading() {
   updateLoading('Selesai!', 100);
   setTimeout(() => {
     DOM.loadingOverlay.classList.add('hidden');
-  }, 500);
+  }, 400);
 }
 
 function showProcessing() {
@@ -1007,9 +1655,18 @@ function showToast(message, type = 'info') {
   
   DOM.toastContainer.appendChild(toast);
   
-  // Auto-remove after 4 seconds
   setTimeout(() => {
     toast.classList.add('removing');
     setTimeout(() => toast.remove(), 300);
   }, 4000);
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (m) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  })[m]);
 }
